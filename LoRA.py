@@ -1,51 +1,31 @@
+from transformers import AutoModel, AutoTokenizer
 import torch
-import torch.nn as nn
-from transformers import BertModel, BertConfig
+from peft import LoraConfig, get_peft_model
 
-# Define LoRA layer
-class LoRALayer(nn.Module):
-    def __init__(self, original_dim, rank):
-        super(LoRALayer, self).__init__()
-        self.rank = rank
-        # Low-rank matrices
-        self.lora_A = nn.Parameter(torch.randn(original_dim, rank))
-        self.lora_B = nn.Parameter(torch.randn(rank, original_dim))
+model_name = "bert-base-uncased"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModel.from_pretrained(model_name)
 
-    def forward(self, x):
-        # Apply low-rank adaptation: x + (x @ A @ B)
-        return x + x @ self.lora_A @ self.lora_B
 
-# Modify BERT's self-attention mechanism with LoRA
-class LoRABertSelfAttention(nn.Module):
-    def __init__(self, config, rank):
-        super(LoRABertSelfAttention, self).__init__()
-        self.original_self_attention = nn.MultiheadAttention(
-            embed_dim=config.hidden_size,
-            num_heads=config.num_attention_heads,
-            dropout=config.attention_probs_dropout_prob,
-        )
-        # Add LoRA layers for query, key, and value projections
-        self.lora_query = LoRALayer(config.hidden_size, rank)
-        self.lora_key = LoRALayer(config.hidden_size, rank)
-        self.lora_value = LoRALayer(config.hidden_size, rank)
+lora_config = LoraConfig(
+    r=8,
+    lora_alpha=32,
+    target_modules=["query", "value"], 
+    lora_dropout=0.1,
+    task_type="FEATURE_EXTRACTION"
+)
+model = get_peft_model(model, lora_config)
+dataloader = DataLoader(dataset, batch_size=32, collate_fn=collate_fn)
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
-    def forward(self, query, key, value, attention_mask=None):
-        # Apply LoRA to query, key, and value
-        query = self.lora_query(query)
-        key = self.lora_key(key)
-        value = self.lora_value(value)
-        # Pass through original self-attention
-        output, _ = self.original_self_attention(query, key, value, attn_mask=attention_mask)
-        return output
+model.train()
+for epoch in range(5):
+    for words1, words2 in dataloader:
+        optimizer.zero_grad()
+        
+        vecs1 = torch.stack([get_word_vector(model, tokenizer, word) for word in words1])
+        vecs2 = torch.stack([get_word_vector(model, tokenizer, word) for word in words2])
 
-# Wrap BERT with LoRA
-class LoRABertModel(nn.Module):
-    def __init__(self, config, rank):
-        super(LoRABertModel, self).__init__()
-        self.bert = BertModel(config)
-        # Replace self-attention layers with LoRA self-attention
-        for layer in self.bert.encoder.layer:
-            layer.attention.self = LoRABertSelfAttention(config, rank)
-
-    def forward(self, input_ids, attention_mask=None):
-        return self.bert(input_ids=input_ids, attention_mask=attention_mask)
+        loss = cosine_loss(vecs1, vecs2, 1.0)
+        loss.backward()
+        optimizer.step()
